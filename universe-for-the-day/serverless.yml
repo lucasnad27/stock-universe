@@ -1,0 +1,17 @@
+org: lucasnad27
+app: universe-for-the-day
+service: universe-for-the-day
+
+frameworkVersion: '2'
+
+provider:
+  name: aws
+  runtime: python3.8
+  lambdaHashingVersion: 20201221
+
+functions:
+  getAllStocks:
+    handler: handler.run
+    events:
+      # Invoke Lambda function every hour
+      - schedule: cron(0 * * * ? *)
