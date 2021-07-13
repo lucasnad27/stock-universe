@@ -4,6 +4,12 @@ service: universe-for-the-day
 
 frameworkVersion: '2'
 
+plugins:
+  - serverless-python-requirements
+custom:
+  pythonRequirements:
+    dockerizePip: true
+
 provider:
   name: aws
   runtime: python3.8
@@ -13,5 +19,6 @@ functions:
   getAllStocks:
     handler: handler.run
     events:
-      # Invoke Lambda function every hour
-      - schedule: cron(0 * * * ? *)
+      # Invoke Lambda function every day
+      - schedule: cron(15 18 * * ? *)
+
