@@ -19,7 +19,6 @@ jobs:
       working-directory: ./src
     - name: serverless deploy
       uses: serverless/github-action@master
-      working-directory: ./src
       with:
         args: deploy
       env:
