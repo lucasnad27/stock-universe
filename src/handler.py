@@ -12,6 +12,7 @@ logger.setLevel(logging.INFO)
 
 
 def run(event, context):
+    """Dummy commit"""
     s3_bucket = os.environ['S3_BUCKET']
     universe_date = arrow.get(event["time"])
     logger.info(f"Pulling most recent universe of stocks from nasdaq based on date for {universe_date}")
