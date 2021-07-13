@@ -18,6 +18,8 @@ provider:
 functions:
   getAllStocks:
     handler: handler.run
+    environment:
+      S3_BUCKET: ${param:S3_BUCKET}
     events:
       # Invoke Lambda function every day
       - schedule: cron(15 18 * * ? *)
