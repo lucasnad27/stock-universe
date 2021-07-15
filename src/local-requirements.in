@@ -1,0 +1,8 @@
+-c requirements.in
+
+black
+mypy
+ipdb
+ipython
+flake8
+mypy

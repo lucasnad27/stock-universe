@@ -1,2 +1,6 @@
 arrow
 boto3
+boto3-stubs[s3]
+pandas
+tda-api
+tenacity

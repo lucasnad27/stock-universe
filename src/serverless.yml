@@ -1,5 +1,5 @@
 org: lucasnad27
-app: universe-for-the-day
+app: stock-universe
 service: universe-for-the-day
 
 frameworkVersion: '2'
@@ -16,11 +16,44 @@ provider:
   lambdaHashingVersion: 20201221
 
 functions:
-  getAllStocks:
-    handler: handler.run
+  getStockUniverse:
+    handler: handler.get_stock_universe
     environment:
       S3_BUCKET: ${param:S3_BUCKET}
+      CHUNK_SIZE: ${param:CHUNK_SIZE}
+      TD_MAX_CONCURRENT_REQUESTS: ${param:TD_MAX_CONCURRENT_REQUESTS}
     events:
       # Invoke Lambda function every day
       - schedule: cron(15 18 * * ? *)
-
+  processEodQuotes:
+    handler: handler.process_eod_quotes
+    timeout: 240
+    maximumRetryAttempts: 1
+    environment:
+      TD_API_KEY: ${param:TD_API_KEY}
+      TD_TOKEN_SECRET_NAME: ${param:TD_TOKEN_SECRET_NAME}
+      TD_MAX_CONCURRENT_REQUESTS: ${param:TD_MAX_CONCURRENT_REQUESTS}
+      CHUNK_SIZE: ${param:CHUNK_SIZE}
+    events:
+      - s3:
+          bucket: ${param:S3_BUCKET}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: incoming/quotes
+          existing: true
+  processEodFundamentals:
+    handler: handler.process_eod_fundamentals
+    timeout: 240
+    maximumRetryAttempts: 1
+    environment:
+      TD_API_KEY: ${param:TD_API_KEY}
+      TD_TOKEN_SECRET_NAME: ${param:TD_TOKEN_SECRET_NAME}
+      TD_MAX_CONCURRENT_REQUESTS: ${param:TD_MAX_CONCURRENT_REQUESTS}
+      CHUNK_SIZE: ${param:CHUNK_SIZE}
+    events:
+      - s3:
+          bucket: ${param:S3_BUCKET}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: incoming/fundamentals
+          existing: true
