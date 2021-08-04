@@ -1,0 +1,25 @@
+name: Deploy prod release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v[1-9]+.[0-9]+.[0-9]+
+
+jobs:
+  deploy:
+    defaults:
+      run:
+        working-directory: src
+    name: deploy
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Use Node.js
+      uses: actions/setup-node@v1
+    - run: npm ci
+    - run: npm i -g serverless@2.x
+    - run: serverless deploy --stage prod
+      env:
+        SERVERLESS_ACCESS_KEY: ${{ secrets.SERVERLESS_ACCESS_KEY }}
