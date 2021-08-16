@@ -77,7 +77,17 @@ async def process_eod_quotes(s3: S3Client, bucket: str, key: str) -> None:
 
     # converts dictionary into pandas dataframe with the key being the index and label the index 'Symbol'
     quotes_df = pd.DataFrame.from_dict(quotes, orient="index")
-    quotes_df.index.name = "Symbol"
+    quotes_df.index.name = "code"
+    column_mapping = {
+        "openPrice": "open",
+        "highPrice": "high",
+        "lowPrice": "low",
+        "closePrice": "close",
+        "totalVolume": "volume",
+    }
+    quotes_df = quotes_df.rename(columns=column_mapping)
+    # drop all other columns from quotes_df
+    quotes_df = quotes_df[["open", "high", "low", "close", "volume"]]
 
     upload_key = f"{arrow.utcnow().format('YYYY/MM/DD')}/quotes/{exchange}.csv"
     stream = StringIO()
