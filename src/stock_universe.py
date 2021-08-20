@@ -8,6 +8,7 @@ from io import StringIO
 from typing import List
 
 import arrow
+import exchange_calendars as ec
 import numpy as np
 import pandas as pd
 from arrow.arrow import Arrow
@@ -22,6 +23,19 @@ logger.setLevel(logging.INFO)
 
 CHUNK_SIZE = int(os.environ["CHUNK_SIZE"])
 TD_MAX_CONCURRENT_REQUESTS = int(os.environ["TD_MAX_CONCURRENT_REQUESTS"])
+
+
+def is_valid_universe_date(now: Arrow) -> bool:
+    """
+    Checks if the current date is a valid session to pull data from TD
+    """
+    is_valid_universe_date = True
+    nyse = ec.get_calendar("NYSE")
+    if not nyse.is_session(now.datetime):
+        logger.info(f"Exchange was closed on {now.format('YYYY-MM-DD')}")
+        is_valid_universe_date = False
+    # if the current date is a weekend, then we can't pull data from TD
+    return is_valid_universe_date
 
 
 def fetch_latest_universe_of_stocks(s3: S3Client, processing_date: Arrow, bucket: str) -> None:

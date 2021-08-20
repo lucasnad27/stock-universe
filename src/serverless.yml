@@ -24,7 +24,7 @@ functions:
       TD_MAX_CONCURRENT_REQUESTS: ${param:TD_MAX_CONCURRENT_REQUESTS}
     events:
       # Invoke Lambda function every day
-      - schedule: cron(15 18 * * ? *)
+      - schedule: cron(15 22 * * ? *)
   processEodQuotes:
     handler: handler.process_eod_quotes
     timeout: 240
