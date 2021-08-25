@@ -6,7 +6,7 @@ import csv
 import functools
 import os
 from io import StringIO
-from typing import Dict
+from typing import Dict, Optional
 
 from alive_progress import alive_bar
 import arrow
@@ -36,18 +36,15 @@ def save_eod_data(start_date):
     backfill_sessions = nyse.sessions_in_range(start_date.datetime, end_date.datetime)
 
     # EOD price, splits, and dividends for last 30 years
-    # nasdaq_url = "https://eodhistoricaldata.com/api/eod-bulk-last-day/NASDAQ"
-    # nyse_url = "https://eodhistoricaldata.com/api/eod-bulk-last-day/NYSE"
     us_url = "https://eodhistoricaldata.com/api/eod-bulk-last-day/US"
     params = {"api_token": os.environ["EOD_DATA_API_KEY"], "fmt": "json", "filter": "extended"}
     with alive_bar(len(backfill_sessions), title="30 year backtest data pull") as bar:
         for session in backfill_sessions:
             session_date = arrow.get(session.date())
             bar.text(f"Pulling EOD pricing from {session_date.format('YYYY-MM-DD')}")
-            # params.update({"date": arrow.get(session.date()).format("YYYY-MM-DD"), "type": "dividends"})
             params.update({"date": session_date.format("YYYY-MM-DD")})
             us_response = get_prices(us_url, params)
-            save_to_s3(s3, session_date, us_response.json(), "us")
+            save_to_s3(s3, session_date, us_response.json(), "us", "prices")
             bar()
 
 
@@ -55,6 +52,8 @@ def save_eod_data(start_date):
 @click.argument("start-date")
 @click.argument("end-date")
 def update_market_cap(start_date, end_date):
+    start_date = arrow.get(start_date)
+    end_date = arrow.get(end_date)
     click.echo(f"{start_date} - {end_date}")
     s3_client = boto3.client("s3")
     s3_bucket = "prod-stock-universe"
@@ -65,26 +64,32 @@ def update_market_cap(start_date, end_date):
             session_date = arrow.get(session.date())
             bar.text(session_date.format("YYYY-MM-DD"))
             df = get_eod_prices(s3_client, s3_bucket, session_date)
-            # filter out all rows except where Ticker == AAPL
-            df = df[df["Ticker"] == "AAPL"]
-            # for every ticker in df, get outstanding shares by calling the outstanding_shares function
-            # then add to the df
-            # below code is not tested (co-pilot suggestion)
-            df["market_cap"] = df.apply(
-                lambda row: get_market_cap(row["Ticker"], row["adjusted_close"], arrow.get(row["date"])), axis=1
+            # for every ticker in df, get outstanding shares by calling the get_outstanding_shares function
+            df["outstanding_shares"] = df.apply(
+                lambda row: get_outstanding_shares(s3_client, s3_bucket, row["Ticker"], arrow.get(row["date"])), axis=1
             )
+            df["market_cap"] = df["outstanding_shares"] * df["adjusted_close"]
+            # drop MarketCapitalization from df
+            df = df.drop(columns=["MarketCapitalization"])
             # write the df to s3
-            save_to_s3(s3_client, session_date, df.to_dict(orient="records"), "us")
+            save_to_s3(s3_client, session_date, df.to_dict(orient="records"), "us", "prices")
             bar()
 
 
-def get_market_cap(ticker: str, share_price: float, trading_day: arrow.arrow.Arrow) -> float:
-    df = get_quarterly_outstanding_shares(ticker)
+def get_outstanding_shares(
+    s3_client: S3Client, s3_bucket: str, ticker: str, trading_day: arrow.arrow.Arrow
+) -> Optional[float]:
+    click.echo(f"Getting outstanding shares for {ticker}")
+    df = get_quarterly_outstanding_shares(s3_client, s3_bucket, ticker)
+    if df.empty:
+        return None
     # filter df to exclude all index datetimes in the future compared to date
-    df = df[df.index <= pd.to_datetime(trading_day.date())].sort_index(ascending=False)
-    outstanding_shares = df.iloc[0]["shares"]
-    assert isinstance(outstanding_shares, float)
-    return outstanding_shares * share_price
+    filtered_df = df[df.index <= pd.to_datetime(trading_day.date())].sort_index(ascending=False)
+    if filtered_df.empty:
+        # no outstanding share data exists for this date for this ticker, grab last known value
+        filtered_df = df.sort_index()
+    outstanding_shares = float(filtered_df.iloc[0]["shares"])
+    return outstanding_shares
 
 
 def get_eod_prices(s3_client: S3Client, s3_bucket: str, trading_day: arrow.arrow.Arrow) -> pd.DataFrame:
@@ -103,21 +108,50 @@ def get_eod_prices(s3_client: S3Client, s3_bucket: str, trading_day: arrow.arrow
 
 
 @functools.cache
-@retry(wait=wait_fixed(65), stop=stop_after_attempt(3))
-def get_quarterly_outstanding_shares(ticker: str) -> pd.DataFrame:
+@retry(wait=wait_fixed(65), stop=stop_after_attempt(2))
+def get_quarterly_outstanding_shares(s3_client: S3Client, s3_bucket: str, ticker: str) -> pd.DataFrame:
+    upload_key = f"tickers/outstanding_shares_quarterly/{ticker}-US.csv"
     url = f"https://eodhistoricaldata.com/api/fundamentals/{ticker}.US"
     params = {"api_token": os.environ["EOD_DATA_API_KEY"], "filter": "outstandingShares::quarterly"}
+
+    try:
+        s3_response = s3_client.get_object(Bucket=s3_bucket, Key=upload_key)
+        click.echo(f"Using s3 for quarterly share information for {ticker}")
+        df = pd.read_csv(s3_response["Body"], index_col=0)
+        return df
+    except s3_client.exceptions.NoSuchKey:
+        # share information has not been uploaded to s3 yet, call the API instead
+        pass
+    click.echo(f"Calling API for quarterly share information for {ticker}")
     response = requests.get(url, params=params)
-    response.raise_for_status()
-    # load the json response as a pandas dataframe with dateFormatted as the index
-    df = pd.read_json(response.text, orient="index", convert_dates=["date"])
+    # This is gross, too many ways of telling me no data, argh
+    if response.status_code == 404:
+        # noop
+        pass
+    else:
+        response.raise_for_status()
+    invalid_responses = ["{}", '"NA"']
+    if response.status_code == 404 or response.text in invalid_responses:
+        # create an empty dataframe with columns shares_outstanding and date
+        df = pd.DataFrame(columns=["shares_outstanding", "date", "dateFormatted"])
+    else:
+        df = pd.read_json(response.text, orient="index", convert_dates=["date"])
     df = df.drop(columns=["dateFormatted"]).set_index("date")
+    stream = StringIO()
+    df.to_csv(stream)
+    # convert df to csv and upload to s3 based on the date
+    s3_client.put_object(Body=stream.getvalue().encode("utf-8"), Bucket=s3_bucket, Key=upload_key)
     return df
 
 
-def save_to_s3(s3, session_date, data, exchange):
+def save_to_s3(
+    s3: S3Client, session_date: Optional[arrow.arrow.Arrow], data: dict, file_name: str, data_type: str = "prices"
+) -> None:
     bucket = "prod-stock-universe"
-    upload_key = f"{session_date.format('YYYY/MM/DD')}/prices/{exchange}.csv"
+    if session_date:
+        upload_key = f"{session_date.format('YYYY/MM/DD')}/{data_type}/{file_name}.csv"
+    else:
+        upload_key = f"{data_type}/{file_name}.csv"
     stream = StringIO()
     headers = data[0].keys()
     writer = csv.DictWriter(stream, fieldnames=headers)
